@@ -1,0 +1,524 @@
+---
+title: "Classification based machine learning for trading in R"
+output:
+  html_document:
+    df_print: paged
+---
+
+# Libraries
+
+```{r}
+
+library(quantmod)
+library(TTR)
+library(lubridate)
+library(tidyverse)
+library("naivebayes")
+library("e1071")
+library("randomForest")
+library("ggplot2")
+library(dplyr)
+
+```
+
+
+
+## Load market data
+
+```{r}
+
+getSymbols("^GSPC", src = "yahoo") # S & P 500
+getSymbols("CL=F", src = "yahoo") # Crude Oil
+getSymbols("SHEL", src = "yahoo") # Shell 
+
+dim(SHEL)
+dim(GSPC)
+dim(`CL=F`)
+
+
+# Merge the data frames based on the date index
+merged_df <- merge(SHEL, GSPC, all = TRUE)
+
+# Print the merged data frame
+merged_df
+
+# Merge the data frames based on the date index
+Three_Stock_df <- merge(`CL=F`,merged_df, all = TRUE)
+
+# Print the merged data frame
+Three_Stock_df
+
+
+```
+
+
+
+
+
+
+
+
+## Summary Statistics
+```{r}
+
+
+# Get summary statistics for the data frame
+summary_matrix <- as.matrix(summary(Three_Stock_df))
+
+summary_matrix
+
+
+# Standard Deviations
+
+sd_three_stock <- rep(NA, ncol(Three_Stock_df))
+sd_col_name <- rep(NA, ncol(Three_Stock_df))
+
+for(i in 1:ncol(Three_Stock_df)){
+  
+  sd_col_name[i] <- names(Three_Stock_df)[i]
+  sd_three_stock[i] <- sd(Three_Stock_df[,i], na.rm = TRUE)
+  
+}
+
+standard_deviation_ts <- data.frame(t(sd_three_stock))
+names(standard_deviation_ts) <- sd_col_name
+
+standard_deviation_ts
+
+
+```
+
+
+
+
+```{r}
+
+## Charts
+
+chartSeries(`CL=F`, theme = "white")
+addEMA(50, col = "blue")
+
+# Add moving averages of S&P 500 along with Shell to the chart
+addTA(SMA(SHEL[,6], 10), on=1, col = "yellow")  # Yellow is Shell Gas
+addTA(SMA(`GSPC`[,6], 50), on=1, "red")     # red is S&P 500
+
+
+```
+
+## Plotting the data
+```{r}
+
+chartSeries(`CL=F`, subset = "2017-12::", theme = "white") # Crude Oil
+addEMA( n = 7, col = "orange")
+addEMA( n = 20, col = "red")
+
+chartSeries(SHEL, subset = "2017-12::", theme = "white") # S&P 500
+addEMA( n = 7, col = "orange")
+addEMA( n = 20, col = "red")
+
+chartSeries(GSPC, subset = "2017-12::", theme = "white") # Shell
+addEMA( n = 7, col = "orange")
+addEMA( n = 20, col = "red")
+
+```
+
+YTD
+```{r}
+chartSeries(`CL=F`, subset = "2022-12::", theme = "white") # Crude Oil
+addEMA( n = 7, col = "orange")
+addEMA( n = 20, col = "red")
+
+chartSeries(SHEL, subset = "2022-12::", theme = "white") # S&P 500
+addEMA( n = 7, col = "orange")
+addEMA( n = 20, col = "red")
+
+chartSeries(GSPC, subset = "2022-12::", theme = "white") # Shell
+addEMA( n = 7, col = "orange")
+addEMA( n = 20, col = "red")
+
+```
+MTD
+
+```{r}
+chartSeries(`CL=F`, subset = "2023-3::", theme = "white") # Crude Oil
+addEMA( n = 7, col = "orange")
+addEMA( n = 20, col = "red")
+
+chartSeries(SHEL, subset = "2023-3::", theme = "white") # S&P 500
+addEMA( n = 7, col = "orange")
+addEMA( n = 20, col = "red")
+
+chartSeries(GSPC, subset = "2023-3::", theme = "white") # Shell
+addEMA( n = 7, col = "orange")
+addEMA( n = 20, col = "red")
+
+```
+
+
+
+## Feature engineering - final features dataframe
+```{r}
+
+names(SHEL) <- c("Open", "High", "Low", "Close", "Volume", "Adjusted")
+names(GSPC) <- c("Open", "High", "Low", "Close", "Volume", "Adjusted")
+names(`CL=F`) <- c("Open", "High", "Low", "Close", "Volume", "Adjusted")
+
+names(Three_Stock_df)
+
+
+#making the features: Crude Oil
+candle.type.current_CO <- data.frame(ifelse(Three_Stock_df$CL.F.Close > Three_Stock_df$CL.F.Open, "bull", "bear"))
+candle.type.previous_CO <- data.frame(lag(candle.type.current_CO$CL.F.Close, n = 1))
+candle.next.day_CO <- data.frame(lead(candle.type.current_CO$CL.F.Close, n = 1))
+doji_CO <- data.frame(ifelse(abs(Three_Stock_df$CL.F.Close - Three_Stock_df$CL.F.Open) < 0.45, "yes", "no"))    # Describe why 0.45*****
+daily.return_CO <- data.frame(abs(Three_Stock_df$CL.F.Close - Three_Stock_df$CL.F.Open))
+nextday.return_CO <- lead(daily.return_CO$CL.F.Close, n = 1)
+
+#making the features: S&P 500
+candle.type.current_SP <- data.frame(ifelse(Three_Stock_df$GSPC.Close > Three_Stock_df$GSPC.Open, "bull", "bear"))
+candle.type.previous_SP <- data.frame(lag(candle.type.current_SP$GSPC.Close, n = 1))
+candle.next.day_SP <- data.frame(lead(candle.type.current_SP$GSPC.Close, n = 1))
+doji_SP <- data.frame(ifelse(abs(Three_Stock_df$GSPC.Close - Three_Stock_df$GSPC.Open) < 0.45, "yes", "no"))    # Describe why 0.45*****
+daily.return_SP <- data.frame(abs(Three_Stock_df$GSPC.Close - Three_Stock_df$GSPC.Open))
+nextday.return_SP <- lead(daily.return_SP$GSPC.Close, n = 1)
+
+#making the features: Shell
+candle.type.current_shell <- data.frame(ifelse(Three_Stock_df$SHEL.Close > Three_Stock_df$SHEL.Open, "bull", "bear"))
+candle.type.previous_shell <- data.frame(lag(candle.type.current_shell$SHEL.Close, n = 1))
+candle.next.day_shell <- data.frame(lead(candle.type.current_shell$SHEL.Close, n = 1))
+doji_shell <- data.frame(ifelse(abs(Three_Stock_df$SHEL.Close - Three_Stock_df$SHEL.Open) < 0.45, "yes", "no"))  # Describe why 0.45*****
+daily.return_shell <- data.frame(abs(Three_Stock_df$SHEL.Close - Three_Stock_df$SHEL.Open))
+nextday.return_shell <- lead(daily.return_shell$SHEL.Close, n = 1)
+
+
+#Making up the dataframe with all the features as columns
+clData <- data.frame(candle.type.current_CO, candle.type.previous_CO,
+                     doji_CO,
+                     daily.return_CO, nextday.return_CO, candle.next.day_CO,
+                     candle.type.current_SP, candle.type.previous_SP,
+                     doji_SP,
+                     daily.return_SP, nextday.return_SP, candle.next.day_SP,
+                     candle.type.current_shell, candle.type.previous_shell,
+                     doji_shell,
+                     daily.return_shell, nextday.return_shell, candle.next.day_shell)
+
+# naming the dataframe columns
+names(clData) <- c("candle.type.current_CO", "candle.type.previous_CO",
+                     "doji_CO",
+                     "daily.return_CO", "nextday.return_CO", "candle.next.day_CO",
+                     "candle.type.current_SP", "candle.type.previous_SP",
+                     "doji_SP",
+                     "daily.return_SP", "nextday.return_SP", "candle.next.day_SP",
+                     "candle.type.current_shell", "candle.type.previous_shell",
+                     "doji_shell",
+                     "daily.return_shell", "nextday.return_shell", "candle.next.day_shell")
+
+```
+
+## Feature engineering - Training and testing
+```{r}
+clData <- slice(clData, 21:length(clData$doji_CO))
+
+# Make character values into factors
+
+char_cols_cl <- which(sapply(clData, is.character))
+
+for(i in char_cols_cl){
+  clData[,i] <- factor(clData[,i])
+}
+
+#Splitting the data in to train and test
+clData
+
+trainRange <- 2986:3386
+testRange <- 3386:3502
+train <- clData[trainRange,]
+test <- clData[testRange,]
+
+#Degine a formula: target variables and predictors
+target <- "candle.next.day_CO"
+predictors.var <- c("candle.type.current_CO", "candle.type.previous_CO",
+                       "doji_CO", "daily.return_CO", "candle.type.current_SP", "candle.type.previous_SP",
+                       "doji_SP", "daily.return_SP", "candle.type.current_shell", "candle.type.previous_shell",
+                       "doji_shell", "daily.return_shell")
+
+predictors.var <- paste(predictors.var, collapse = "+")
+formula <- as.formula(paste(target, "~", predictors.var, sep = ""))
+
+
+predictedReturn <- function(df, pred) { 
+  #pred is our prediction from the machine learning model
+  df$pred <- pred
+  df$prediReturn <- ifelse(df$candle.next.day_CO != df$pred, -df$nextday.return_CO, df$nextday.return_CO)
+  df$cumReturn <- cumsum(df$prediReturn)
+  return(df)
+}
+
+```
+
+## Logistic Regression
+
+```{r}
+
+# Fit logistic regression model on training data
+lr_model <- glm(formula, data = train, family = "binomial")
+
+# Make predictions on test data using the model
+predictions <- predict(lr_model, newdata = test, type = "response")
+
+
+# Convert probabilities to binary labels
+train_labels <- ifelse(predictions > 0.5, "bull", "bear")
+
+
+# Calculate accuracy of predictions
+lr_accuracy <- mean(train_labels == test$candle.next.day_CO)
+
+# Print accuracy
+cat("Accuracy:", lr_accuracy, "\n")
+
+
+```
+
+
+
+
+
+
+##Naive Bayes algorithm
+```{r}
+
+#naivebayes model
+
+
+nb <- naive_bayes(formula, data = train)
+
+plot(nb)
+
+#prediction
+nb.pred <- predict(nb, test)
+nb.test <- predictedReturn(test, nb.pred)
+
+# Create data frame with predicted return values
+return_df <- data.frame(pred_return = nb.test$prediReturn)
+
+# Add a sequence column for the x-axis
+return_df$seq <- seq_along(return_df$pred_return)
+
+# Plot predicted return values using ggplot2
+ggplot(return_df, aes(x = seq, y = pred_return)) +
+  geom_line() +
+  labs(title = "Predicted Return Values",
+       x = "Sequence",
+       y = "Predicted Return")
+
+
+
+# Create data frame with cumulative return values
+return_df <- data.frame(cum_return = nb.test$cumReturn)
+
+# Add a sequence column for the x-axis
+return_df$seq <- seq_along(return_df$cum_return)
+
+# Plot cumulative return values using ggplot2
+ggplot(return_df, aes(x = seq, y = cum_return)) +
+  geom_line() +
+  labs(title = "Cumulative Return Values",
+       x = "Sequence",
+       y = "Cumulative Return")
+
+
+
+#confusion matrix
+confusionmatrix.nb <- table(nb.test$candle.next.day_CO, nb.test$pred)
+print(confusionmatrix.nb)
+
+#calculating accuracy
+nb.error <- mean(nb.test$candle.next.day_CO != nb.test$pred)
+print(paste("Accuracy", 1 - nb.error))
+
+```
+
+
+
+
+##Random Forest
+```{r}
+
+model.rf <- randomForest(formula, 
+                       data = train,
+                       type = classification,
+                       na.action = na.roughfix,
+                       ntree = 1251,
+                       importance = TRUE,
+                       keep.inbag = TRUE)
+
+
+
+plot(model.rf)
+varImpPlot(model.rf)
+
+#prediction
+rf.pred <- predict(model.rf, test)
+
+#results
+rf.test <- predictedReturn(test, rf.pred)
+
+# Create data frame with predicted return values
+return_df <- data.frame(pred_return = rf.test$prediReturn)
+
+# Add a sequence column for the x-axis
+return_df$seq <- seq_along(return_df$pred_return)
+
+# Plot predicted return values using ggplot2
+ggplot(return_df, aes(x = seq, y = pred_return)) +
+  geom_line() +
+  labs(title = "Predicted Return Values",
+       x = "Sequence",
+       y = "Predicted Return")
+
+
+# Create data frame with cumulative return values
+return_df <- data.frame(cum_return = rf.test$cumReturn)
+
+# Add a sequence column for the x-axis
+return_df$seq <- seq_along(return_df$cum_return)
+
+# Plot cumulative return values using ggplot2
+ggplot(return_df, aes(x = seq, y = cum_return)) +
+  geom_line() +
+  labs(title = "Cumulative Return Values",
+       x = "Sequence",
+       y = "Cumulative Return")
+
+
+#confusion matrix
+confusionmatrix.rf <- table(rf.test$candle.next.day_CO, rf.test$pred)
+print(confusionmatrix.rf)
+
+#calculating accuracy
+rf.error <- mean(rf.test$candle.next.day_CO != rf.test$pred)
+print(paste("Accuracy", 1 - rf.error))
+
+
+```
+
+
+##Support vector machine
+```{r}
+
+#svm model
+model.svm <- svm(formula, data = train, kernel = "radial" )
+
+#prediction
+svm.pred <- predict(model.svm, test)
+
+#results
+svm.test <- predictedReturn(test, svm.pred)
+
+# Create data frame with predicted return values
+return_df <- data.frame(pred_return = svm.test$prediReturn)
+
+# Add a sequence column for the x-axis
+return_df$seq <- seq_along(return_df$pred_return)
+
+# Plot predicted return values using ggplot2
+ggplot(return_df, aes(x = seq, y = pred_return)) +
+  geom_point() +
+  labs(title = "Predicted Return Values",
+       x = "Sequence",
+       y = "Predicted Return")
+
+
+# Create data frame with cumulative return values
+return_df <- data.frame(cum_return = svm.test$cumReturn)
+
+# Add a sequence column for the x-axis
+return_df$seq <- seq_along(return_df$cum_return)
+
+# Plot cumulative return values using ggplot2
+ggplot(return_df, aes(x = seq, y = cum_return)) +
+  geom_point() +
+  labs(title = "Cumulative Return Values",
+       x = "Sequence",
+       y = "Cumulative Return")
+
+
+# Create data frame with predicted return values
+return_df <- data.frame(pred_return = svm.test$prediReturn)
+
+# Add a sequence column for the x-axis
+return_df$seq <- seq_along(return_df$pred_return)
+
+# Plot predicted return values using ggplot2
+ggplot(return_df, aes(x = seq, y = pred_return)) +
+  geom_line(size = 1) +
+  labs(title = "Predicted Return Values",
+       x = "Sequence",
+       y = "Predicted Return")
+
+# Create data frame with cumulative return values
+return_df <- data.frame(cum_return = svm.test$cumReturn)
+
+# Add a sequence column for the x-axis
+return_df$seq <- seq_along(return_df$cum_return)
+
+# Plot cumulative return values using ggplot2
+ggplot(return_df, aes(x = seq, y = cum_return)) +
+  geom_line(size = 1) +
+  labs(title = "Cumulative Return Values",
+       x = "Sequence",
+       y = "Cumulative Return")
+
+
+#confusion matrix
+confusionmatrix.svm <- table(svm.test$candle.next.day_CO, svm.test$pred)
+print(confusionmatrix.svm)
+
+#calculating accuracy
+svm.error <- mean(svm.test$candle.next.day_CO != svm.test$pred)
+print(paste("Accuracy", 1 - svm.error))
+
+```
+
+
+
+## Backtesting and performance comparison of the models
+```{r, echo = FALSE}
+
+nb.cumReturn <- nb.test$cumReturn
+svm.cumReturn <- svm.test$cumReturn
+rf.cumReturn <- rf.test$cumReturn
+total.cumReturn <- nb.cumReturn + svm.cumReturn + rf.cumReturn
+names(nb.cumReturn) <- "cumreturn"
+names(svm.cumReturn) <- "cumreturn"
+names(rf.cumReturn) <- "cumreturn"
+
+combined.cumReturn <- data.frame(c(1:length(nb.cumReturn)), nb.cumReturn, svm.cumReturn, rf.cumReturn, total.cumReturn)
+
+#plot the cumReturn of all the ML models
+print(ggplot(combined.cumReturn) 
+      + geom_line(aes(combined.cumReturn[,1], nb.cumReturn, colour = "nb"))
+      + geom_line(aes(combined.cumReturn[,1], svm.cumReturn, colour = "svm"))
+      + geom_line(aes(combined.cumReturn[,1], rf.cumReturn, colour = "rf"))
+      + geom_line(aes(combined.cumReturn[,1], total.cumReturn, colour = "total"))
+      + ylab("cum return (x1000 USD)")
+   
+)
+
+#plot the training and testing set (close price)
+plot(Three_Stock_df$CL.F.Close[(21 + trainRange), ])
+plot(Three_Stock_df$CL.F.Close[(21 + testRange), ])
+
+#printing training, testing range and accuracies
+print(paste("train:", rownames(train[1,]), ":", rownames(train[length(train$doji),])))
+print(paste("test:", rownames(test[1,]), ":", rownames(test[length(test$doji),])))
+
+print(paste("accuracy:", "nb:" , round(1 - nb.error, 2),
+                         "svm:" , round(1 - svm.error, 2), 
+                         "rf:" , round(1 - rf.error, 2), 
+                          "lr:", round(lr_accuracy,2)))
+
+
+```
+
